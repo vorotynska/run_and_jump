@@ -69,7 +69,7 @@ class Player {
     }
 
     static create(pos) {
-        return new Player(pos.plus(new Vec(0, -0.5)), new Vec(0, 0))
+        return new Player(pos.plus(new Vec(0, -0.5)), new Vec(0, 0));
     }
 }
 Player.prototype.size = new Vec(0.8, 1.5);
@@ -91,7 +91,7 @@ class Lava {
         } else if (ch == "|") {
             return new Lava(pos, new Vec(0, 2));
         } else if (ch == "v") {
-            return new Lawa(pos, new Vec(0, 3), pos);
+            return new Lava(pos, new Vec(0, 3), pos);
         }
     }
 }
@@ -152,6 +152,7 @@ class DOMDisplay {
         this.actorLayer = null;
         parent.appendChild(this.dom);
     }
+
     clear() {
         this.dom.remove();
     }
@@ -178,8 +179,8 @@ function drawActors(actors) {
         let rect = elt("div", {
             class: `actor ${actor.type}`
         });
-        rect.syle.width = `${actor.size.x}px`;
-        rect.style.height = `${actor.size.y}px`;
+        rect.style.width = `${actor.size.x * scale}px`;
+        rect.style.height = `${actor.size.y * scale}px`;
         rect.style.left = `${actor.pos.x * scale}px`;
         rect.style.top = `${actor.pos.y * scale}px`;
         return rect;
@@ -220,7 +221,7 @@ DOMDisplay.prototype.scrollPlayerIntoView = function (state) {
     } else if (center.y > bottom - margin) {
         this.dom.scrollTop = center.y + margin - height;
     }
-}
+};
 
 //Motion and Collision
 //This method tells us whether a rectangle (specified by a position and a size) touches a grid element of the given type.
@@ -228,7 +229,7 @@ Level.prototype.touches = function (pos, size, type) {
     let xStart = Math.floor(pos.x);
     let xEnd = Math.ceil(pos.x + size.x);
     let yStart = Math.floor(pos.y);
-    let yEnd = Math.floor(pos.y + size.y);
+    let yEnd = Math.ceil(pos.y + size.y);
 
     for (let y = yStart; y < yEnd; y++) {
         for (let x = xStart; x < xEnd; x++) {
@@ -249,7 +250,7 @@ State.prototype.update = function (time, keys) {
     if (newState.status != "playing") return newState;
 
     let player = newState.player;
-    if (this.level.tou(player.pos, player.size, "lava")) {
+    if (this.level.touches(player.pos, player.size, "lava")) {
         return new State(this.level, actors, "lost");
     }
 
@@ -259,7 +260,7 @@ State.prototype.update = function (time, keys) {
         }
     }
     return newState;
-}
+};
 
 /*Overlap between actors is detected with the overlap function. It takes
 two actor objects and returns true when they touch—which is the case when they 
@@ -276,13 +277,13 @@ Touching a lava actor sets the game status to "lost". Coins vanish when you touc
 them and set the status to "won" when they are the last coin of the level.*/
 Lava.prototype.collide = function (state) {
     return new State(state.level, state.actors, "lost");
-}
+};
 Coin.prototype.collide = function (state) {
-    let filtered = state.actors.filtered(a => a != this);
+    let filtered = state.actors.filter(a => a != this);
     let status = state.status;
-    if (!filtered.some(a.type == "coin")) status = "won";
+    if (!filtered.some(a => a.type == "coin")) status = "won";
     return new State(state.level, filtered, status);
-}
+};
 
 //This update method computes a new position by adding the product of the time step and the current speed to its old position. 
 Lava.prototype.update = function (time, state) {
@@ -295,3 +296,114 @@ Lava.prototype.update = function (time, state) {
         return new Lava(this.pos, this.speed.times(-1));
     }
 };
+
+//They ignore collisions with the grid since they are simply wobbling around inside of their own square.
+const wobbleSpeed = 8,
+    wobbleDist = 0.07;
+
+Coin.prototype.update = function (time) {
+    let wobble = this.wobble + time * wobbleSpeed;
+    let wobblePos = Math.sin(wobble) * wobbleDist;
+    return new Coin(this.basePos.plus(new Vec(0, wobblePos)),
+        this.basePos, wobble)
+};
+
+//Player motion is handled separately per axis 
+const playerXSpeed = 7;
+const gravity = 30;
+const jumpSpeed = 17;
+
+Player.prototype.update = function (time, state, keys) {
+    let xSpeed = 0;
+    if (keys.ArrowLeft) xSpeed -= playerXSpeed;
+    if (keys.ArrowRight) xSpeed += playerXSpeed;
+    let pos = this.pos;
+    let movedX = pos.plus(new Vec(xSpeed * time, 0));
+    if (!state.level.touches(movedX, this.size, "wall")) {
+        pos = movedX;
+    }
+    let ySpeed = this.speed.y + time * gravity;
+    let movedY = pos.plus(new Vec(0, ySpeed * time));
+    if (!state.level.touches(movedY, this.size, "wall")) {
+        pos = movedY;
+    } else if (keys.ArrowUp && ySpeed > 0) {
+        ySpeed = -jumpSpeed;
+    } else {
+        ySpeed = 0;
+    }
+    return new Player(pos, new Vec(xSpeed, ySpeed));
+};
+
+/* The same handler function is used for both event types. It 
+looks at the event object’s type property to determine whether 
+should be updated to true ("keydown") or false ("keyup").
+ */
+function trackKeys(keys) {
+    let down = Object.create(null);
+
+    function track(event) {
+        if (keys.includes(event.key)) {
+            down[event.key] = event.type == "keydown";
+            event.preventDefault();
+        }
+    }
+    window.addEventListener("keydown", track);
+    window.addEventListener("keyup", track);
+    return down;
+}
+const arrowKeys = trackKeys(["ArrowLeft", "ArrowRight", "ArrowUp"]);
+
+/*Let’s define a helper function that wraps those boring parts in a convenient 
+interface and allows us to simply call runAnimation, giving it a function that 
+expects a time difference as an argument and draws a single frame.*/
+
+function runAnimation(frameFunc) {
+    let lastTime = null;
+
+    function frame(time) {
+        if (lastTime != null) {
+            let timeStep = Math.min(time - lastTime, 100) / 1000;
+            if (frameFunc(timeStep) === false) return;
+        }
+        lastTime = time;
+        requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+}
+
+/*The runLevel function takes a Level object and a display constructor and 
+returns a promise. It displays the level (in document.body) and lets the user 
+play through it. When the level is finished (lost or won), runLevel waits one 
+more second (to let the user see what happens) and then clears the display, stops 
+the animation, and resolves the promise to the game’s end status.*/
+function runLevel(level, Display) {
+    let display = new Display(document.body, level);
+    let state = State.start(level);
+    let ending = 1;
+    return new Promise(resolve => {
+        runAnimation(time => {
+            state = state.update(time, arrowKeys);
+            display.syncState(state);
+            if (state.status == "playing") {
+                return true;
+            } else if (ending > 0) {
+                ending -= time;
+                return true;
+            } else {
+                display.clear();
+                resolve(state.status);
+                return false;
+            }
+        })
+    })
+}
+/*A game is a sequence of levels. Whenever the player dies, the current level is 
+restarted. When a level is completed, we move on to the next level. This can be 
+expressed by the following function, which takes an array of level plans (strings) and a display constructor.*/
+async function runGame(plans, Display) {
+    for (let level = 0; level < plans.length;) {
+        let status = await runLevel(new Level(plans[level]), Display);
+        if (status == "won") level++;
+    }
+    console.log("You've won!");
+}
